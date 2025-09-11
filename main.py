@@ -12,6 +12,7 @@ app_launcher = AppLauncher(headless=False)
 simulation_app = app_launcher.app
 
 from omni.isaac.lab.sim import SimulationCfg
+from omni.isaac.debug_draw import _debug_draw
 
 # 직접 만든 모듈들 임포트
 from .sim_setup import SimulationSetup
@@ -40,7 +41,7 @@ GAINS = {
 
 # 로봇이 경로를 따라갈 때 얼마나 앞을 내다볼지 결정 (미터 단위)
 # 이 값이 클수록 코너를 더 부드럽게 돌지만, 경로를 벗어날 수 있습니다.
-LOOK_AHEAD_DISTANCE = 0.5 
+LOOK_AHEAD_DISTANCE = 0.2
 
 # ===============================================================
 # -------------------- ▶️ 메인 실행 로직 ---------------------------
@@ -158,6 +159,25 @@ if __name__ == "__main__":
         controllers.append(controller)
         controller.initialize()
 
+
+
+    # --- 경로 추적(Path Tracing)을 위한 설정 ---
+    draw = _debug_draw.acquire_debug_draw_interface()
+    path_history = [[] for _ in range(NUM_ROBOTS)]
+    frame_count = 0
+    
+    # 각 로봇의 경로 색상을 웨이포인트 마커와 동일하게 맞춤
+    path_colors = [
+        (0.2, 0.6, 1.0, 1.0),  # Blue (RGBA, A=투명도)
+        (1.0, 0.6, 0.2, 1.0),  # Orange
+        (0.2, 1.0, 0.6, 1.0),  # Teal
+        (1.0, 1.0, 0.2, 1.0),  # Yellow
+        (0.8, 0.3, 1.0, 1.0),  # Purple
+    ]
+
+
+
+
     # 시뮬레이션 준비 대기
     for _ in range(4):
         sim_setup.sim.step()
@@ -165,6 +185,9 @@ if __name__ == "__main__":
     # --- 메인 시뮬레이션 루프 ---
     while simulation_app.is_running():
         sim_setup.sim.step()
+
+        frame_count += 1 # 프레임 카운터 증가
+
         all_robots_finished = True
 
         for i in range(NUM_ROBOTS):
@@ -181,6 +204,15 @@ if __name__ == "__main__":
             robot.articulation.update(sim_setup.sim.get_physics_dt())
 
             robot_pos = robot.get_position()
+
+            # --- 경로 기록 ---
+            # 10프레임마다 한 번씩 현재 로봇 위치를 경로 기록에 추가
+            if frame_count % 10 == 0:
+                pos_list = robot_pos.cpu().numpy().tolist()
+                path_history[i].append(tuple(pos_list))
+
+
+
             robot_yaw = robot.get_yaw()
             waypoint_manager.update_state(robot_pos)
             target_pos = waypoint_manager.get_target(robot_pos[:2])
@@ -191,6 +223,27 @@ if __name__ == "__main__":
                 dt=sim_setup.sim.get_physics_dt() # Pass the simulation time step
             )
             robot.apply_action(action)
+
+        # --- 경로 그리기 ---
+        draw.clear_lines() # 이전 프레임의 선들을 지움
+        for i, path in enumerate(path_history):
+            if len(path) > 1:
+                # 1. 시작점 리스트와 끝점 리스트를 분리합니다.
+                # 예: path가 [p0, p1, p2, p3] 이면,
+                # start_points는 [p0, p1, p2], end_points는 [p1, p2, p3]가 됩니다.
+                start_points = path[:-1]
+                end_points = path[1:]
+
+                # 2. 각 라인(세그먼트)의 수에 맞게 색상과 크기 리스트를 생성합니다.
+                num_lines = len(start_points)
+                color = path_colors[i % len(path_colors)]
+                colors = [color] * num_lines
+                sizes = [2.0] * num_lines
+
+                # 3. 키워드 인자 없이 위치(positional) 인자로 함수를 호출합니다.
+                # draw_lines(시작점들, 끝점들, 색상들, 크기들)
+                draw.draw_lines(start_points, end_points, colors, sizes)
+
 
         if all_robots_finished:
             print("🎉 모든 로봇이 임무를 완료했습니다!")
